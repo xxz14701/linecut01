@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LINE貼圖裁切</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&display=swap');
+        
+        body { 
+            font-family: 'Noto Sans TC', sans-serif; 
+            background-color: #fff7ed;
+            color: #374151;
+            margin: 0;
+            padding: 0;
+        }
+
+        .step-card {
+            background-color: #ffffff;
+            border: 2px solid #fed7aa;
+            border-radius: 1.5rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .step-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #ea580c;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .grid-bg { 
+            background-image: linear-gradient(45deg, #e5e5e5 25%, transparent 25%), 
+                              linear-gradient(-45deg, #e5e5e5 25%, transparent 25%), 
+                              linear-gradient(45deg, transparent 75%, #e5e5e5 75%), 
+                              linear-gradient(-45deg, transparent 75%, #e5e5e5 75%);
+            background-size: 20px 20px;
+            background-color: #fff;
+        }
+
+        .btn-action {
+            font-size: 1.25rem;
+            font-weight: 700;
+            padding: 1rem 2rem;
+            border-radius: 1rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .btn-action:active { transform: scale(0.98); }
+
+        .selection-tag {
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            border: 2px solid #e5e7eb;
+            font-size: 1rem;
+            font-weight: bold;
+            text-align: center;
+            transition: all 0.2s;
+            background: #f9fafb;
+            color: #9ca3af;
+        }
+        .selection-tag.active {
+            border-color: #ea580c;
+            background-color: #fff7ed;
+            color: #ea580c;
+        }
+        
+        /* 選項按鈕樣式 */
+        .radio-option {
+            cursor: pointer;
+            padding: 0.75rem 1rem;
+            border: 2px solid #e5e7eb;
+            border-radius: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s;
+        }
+        .radio-option.selected {
+            border-color: #ea580c;
+            background-color: #fff7ed;
+            color: #c2410c;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const Icon = ({ children, className, spin, ...props }) => (
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={`${className || ''} ${spin ? 'animate-spin' : ''}`} {...props}>{children}</svg>
+        );
+        const IconUpload = () => <Icon><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></Icon>;
+        const IconScissors = () => <Icon><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12 12 12"/><path d="M20 4 8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8 20 20"/></Icon>;
+        const IconDownload = () => <Icon><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></Icon>;
+        const IconStar = () => <Icon><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></Icon>;
+        const IconTag = () => <Icon><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></Icon>;
+        const IconCheck = () => <Icon><polyline points="20 6 9 17 4 12"/></Icon>;
+        const IconGrid = () => <Icon><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></Icon>;
+
+        // --- Worker Script (已修正黑邊問題) ---
+        const workerScript = `
+        self.onmessage = function(e) {
+            const { imageBitmap, id, targetColor, tolerance, smoothness, despill } = e.data;
+            const w = imageBitmap.width;
+            const h = imageBitmap.height;
+            const canvas = new OffscreenCanvas(w, h);
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(imageBitmap, 0, 0);
+            const imgData = ctx.getImageData(0, 0, w, h);
+            const data = imgData.data;
+            const tr = parseInt(targetColor.slice(1, 3), 16);
+            const tg = parseInt(targetColor.slice(3, 5), 16);
+            const tb = parseInt(targetColor.slice(5, 7), 16);
+            const distThreshold = tolerance * 4.42; 
+            const ramp = Math.max(1, smoothness * 5); 
+            
+            for (let i = 0; i < data.length; i += 4) {
+                // 修正重點：檢查原始 Alpha 值
+                // 如果該像素原本就是透明的 (例如縮放留白處)，則跳過處理，保持透明
+                if (data[i + 3] === 0) continue;
+
+                const r = data[i]; const g = data[i + 1]; const b = data[i + 2];
+                const dist = Math.sqrt((r - tr) * (r - tr) + (g - tg) * (g - tg) + (b - tb) * (b - tb));
+                let alpha = 255;
+                if (dist < distThreshold) alpha = 0; 
+                else if (dist < distThreshold + ramp) alpha = ((dist - distThreshold) / ramp) * 255;
+                
+                if (despill && alpha > 0 && targetColor.toLowerCase() === '#00ff00') {
+                    if (g > r && g > b) data[i+1] = (r + b) / 2; 
+                }
+                data[i + 3] = alpha;
+            }
+            ctx.putImageData(imgData, 0, 0);
+            canvas.convertToBlob({ type: 'image/png' }).then(blob => {
+                const reader = new FileReader();
+                reader.readAsDataURL(blob);
+                reader.onloadend = () => self.postMessage({ id, dataUrl: reader.result });
+            });
+        };
+        `;
+        const blob = new Blob([workerScript], { type: "text/javascript" });
+        const workerUrl = URL.createObjectURL(blob);
+
+        const App = () => {
+            // State
+            const [step, setStep] = useState(1);
+            const [originalSheet, setOriginalSheet] = useState(null);
+            const [finalImages, setFinalImages] = useState([]);
+            const [mainId, setMainId] = useState(1);
+            const [tabId, setTabId] = useState(1);
+            const [isProcessing, setIsProcessing] = useState(false);
+            
+            // Settings
+            const [gridRows, setGridRows] = useState(3); // 預設 3列 (12張)
+            const [scaleMode, setScaleMode] = useState('fit'); // 'fit' (完整顯示) or 'fill' (填滿)
+            
+            const [showAdvanced, setShowAdvanced] = useState(false);
+            const [targetColorHex, setTargetColorHex] = useState("#00ff00");
+            const [colorTolerance, setColorTolerance] = useState(30);
+            const [zoomLevel, setZoomLevel] = useState(1.02);
+
+            const workerRef = useRef(null);
+            const processedCountRef = useRef(0);
+
+            // Init Worker
+            useEffect(() => {
+                workerRef.current = new Worker(workerUrl);
+                workerRef.current.onmessage = (e) => {
+                    const { id, dataUrl } = e.data;
+                    setFinalImages(prev => {
+                        const newArr = [...prev, { id, dataUrl }].sort((a,b) => a.id - b.id);
+                        return newArr;
+                    });
+                    processedCountRef.current += 1;
+                    
+                    // 動態判斷結束數量
+                    const totalImages = gridRows * 4;
+                    if (processedCountRef.current === totalImages) {
+                        setIsProcessing(false);
+                        setStep(2);
+                    }
+                };
+                return () => workerRef.current.terminate();
+            }, [gridRows]); // gridRows 改變時不需要重啟 worker，但依賴要正確
+
+            // Handle File Upload
+            const handleUpload = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        setOriginalSheet(img);
+                        setTimeout(() => startProcessing(img), 100);
+                    };
+                    img.src = ev.target.result;
+                };
+                reader.readAsDataURL(file);
+            };
+
+            const startProcessing = (imgObj) => {
+                setIsProcessing(true);
+                setFinalImages([]);
+                processedCountRef.current = 0;
+
+                const cols = 4;
+                const rows = gridRows; // 使用設定的行數
+                
+                const pieceW = imgObj.width / cols;
+                const pieceH = imgObj.height / rows;
+                const canvas = document.createElement('canvas');
+                canvas.width = imgObj.width; canvas.height = imgObj.height;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                ctx.drawImage(imgObj, 0, 0);
+
+                for(let r=0; r<rows; r++) {
+                    for(let c=0; c<cols; c++) {
+                        const pCanvas = document.createElement('canvas');
+                        pCanvas.width = pieceW; pCanvas.height = pieceH;
+                        const pCtx = pCanvas.getContext('2d');
+                        pCtx.drawImage(canvas, c*pieceW, r*pieceH, pieceW, pieceH, 0, 0, pieceW, pieceH);
+                        
+                        // LINE 貼圖標準尺寸 x2 (為了高畫質)
+                        const workW = 370 * 2; 
+                        const workH = 320 * 2;
+                        const workCanvas = document.createElement('canvas');
+                        workCanvas.width = workW; workCanvas.height = workH;
+                        const workCtx = workCanvas.getContext('2d');
+                        
+                        // 縮放邏輯
+                        let scale;
+                        if (scaleMode === 'fill') {
+                            // 填滿模式：取最大比例 (會裁切)
+                            scale = Math.max(workW/pieceW, workH/pieceH) * zoomLevel;
+                        } else {
+                            // 完整模式：取最小比例 (會有留白，但已修正為透明)
+                            scale = Math.min(workW/pieceW, workH/pieceH) * zoomLevel;
+                        }
+                        
+                        const drawW = pieceW * scale; 
+                        const drawH = pieceH * scale;
+                        
+                        // 居中繪製
+                        workCtx.drawImage(pCanvas, 0, 0, pieceW, pieceH, (workW-drawW)/2, (workH-drawH)/2, drawW, drawH);
+
+                        createImageBitmap(workCanvas).then(bitmap => {
+                            workerRef.current.postMessage({
+                                imageBitmap: bitmap, 
+                                id: r*cols+c+1, 
+                                targetColor: targetColorHex,
+                                tolerance: colorTolerance, 
+                                smoothness: 2, 
+                                despill: true
+                            }, [bitmap]);
+                        });
+                    }
+                }
+            };
+
+            const resizeImageFromUrl = (dataUrl, width, height) => {
+                return new Promise((resolve) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width; canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        const scale = Math.min(width/img.width, height/img.height);
+                        const newW = img.width * scale; const newH = img.height * scale;
+                        ctx.drawImage(img, 0, 0, img.width, img.height, (width-newW)/2, (height-newH)/2, newW, newH);
+                        resolve(canvas.toDataURL('image/png').split(',')[1]);
+                    };
+                    img.src = dataUrl;
+                });
+            };
+
+            const downloadZip = async () => {
+                const zip = new JSZip();
+                await Promise.all(finalImages.map(async (img, idx) => {
+                    const b64 = await resizeImageFromUrl(img.dataUrl, 370, 320);
+                    zip.file(`${(idx+1).toString().padStart(2, '0')}.png`, b64, {base64:true});
+                }));
+                
+                const mImg = finalImages.find(i => i.id === mainId) || finalImages[0];
+                if (mImg) zip.file("main.png", await resizeImageFromUrl(mImg.dataUrl, 240, 240), {base64: true});
+                
+                const tImg = finalImages.find(i => i.id === tabId) || finalImages[0];
+                if (tImg) zip.file("tab.png", await resizeImageFromUrl(tImg.dataUrl, 96, 74), {base64: true});
+
+                zip.generateAsync({type:"blob"}).then(c => saveAs(c, `Line貼圖_${gridRows*4}張_已去背.zip`));
+            };
+
+            const totalStickers = gridRows * 4;
+
+            return (
+                <div className="min-h-screen flex flex-col justify-center items-center p-4 md:p-8">
+                    <div className="w-full max-w-5xl">
+                    
+                        <header className="text-center py-8 mb-6">
+                            <h1 className="text-4xl font-black text-gray-800 flex flex-col md:flex-row items-center justify-center gap-3 mb-2">
+                                <span className="bg-orange-100 p-3 rounded-full text-orange-500 shadow-sm"><IconScissors width="40" height="40"/></span>
+                                <span>LINE貼圖裁切</span>
+                            </h1>
+                            <p className="text-xl text-gray-600 font-medium">
+                                只要一張圖，自動幫您切成 12 張或 16 張並去背！
+                            </p>
+                        </header>
+
+                        {/* STEP 1: Upload */}
+                        {step === 1 && (
+                            <div className="step-card">
+                                <div className="step-title">
+                                    <span className="bg-orange-500 text-white rounded-full w-10 h-10 flex items-center justify-center text-xl shrink-0">1</span>
+                                    請選擇貼圖張數與圖片
+                                </div>
+                                
+                                <div className="max-w-2xl mx-auto space-y-6">
+                                    {/* 1. 選擇版型 */}
+                                    <div className="bg-gray-50 p-6 rounded-xl border border-gray-200">
+                                        <label className="block text-gray-700 font-bold mb-4 flex items-center justify-center gap-2 text-lg">
+                                            <IconGrid width="24" height="24"/> 您的圖片是幾格？
+                                        </label>
+                                        <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
+                                            <div onClick={() => setGridRows(3)} 
+                                                 className={`radio-option ${gridRows === 3 ? 'selected' : 'bg-white hover:bg-gray-50'}`}>
+                                                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${gridRows === 3 ? 'border-orange-500' : 'border-gray-300'}`}>
+                                                    {gridRows === 3 && <div className="w-2 h-2 rounded-full bg-orange-500"/>}
+                                                </div>
+                                                <span className="font-medium">12 張 (4x3)</span>
+                                            </div>
+                                            <div onClick={() => setGridRows(4)} 
+                                                 className={`radio-option ${gridRows === 4 ? 'selected' : 'bg-white hover:bg-gray-50'}`}>
+                                                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${gridRows === 4 ? 'border-orange-500' : 'border-gray-300'}`}>
+                                                    {gridRows === 4 && <div className="w-2 h-2 rounded-full bg-orange-500"/>}
+                                                </div>
+                                                <span className="font-medium">16 張 (4x4)</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* 2. 上傳 */}
+                                    <div className="relative group w-full">
+                                        <div className={`border-4 border-dashed rounded-3xl h-72 flex flex-col items-center justify-center transition-all cursor-pointer overflow-hidden relative
+                                            ${isProcessing ? 'bg-orange-50 border-orange-400' : 'bg-white border-gray-300 hover:border-orange-400 hover:bg-orange-50'}
+                                        `}>
+                                            <input type="file" accept="image/*" onChange={handleUpload} disabled={isProcessing} className="absolute inset-0 opacity-0 cursor-pointer z-20" />
+                                            
+                                            {isProcessing ? (
+                                                <div className="flex flex-col items-center animate-pulse text-orange-600">
+                                                    <Icon width="60" height="60" spin><path d="M21 12a9 9 0 1 1-6.219-8.56"/></Icon>
+                                                    <span className="mt-4 text-2xl font-bold">正在裁切 {totalStickers} 張...</span>
+                                                </div>
+                                            ) : (
+                                                <div className="flex flex-col items-center text-center p-6">
+                                                    <div className="w-20 h-20 bg-orange-100 text-orange-500 rounded-2xl flex items-center justify-center mb-4">
+                                                        <IconUpload width="40" height="40" />
+                                                    </div>
+                                                    <span className="text-2xl font-bold text-gray-700">點此上傳圖片</span>
+                                                    <span className="text-gray-500 mt-2">支援 JPG / PNG</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* STEP 2: Result */}
+                        {step === 2 && (
+                            <div className="animate-fade-in">
+                                <div className="step-card">
+                                    <div className="step-title justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <span className="bg-orange-500 text-white rounded-full w-10 h-10 flex items-center justify-center text-xl shrink-0">2</span>
+                                            裁切完成 ({finalImages.length}張)
+                                        </div>
+                                        <button onClick={() => setStep(1)} className="text-base text-gray-400 underline font-normal hover:text-orange-500">
+                                            重新上傳
+                                        </button>
+                                    </div>
+
+
+                                    <div className="grid grid-cols-4 gap-4 mb-8">
+                                        {finalImages.map((img, idx) => (
+                                            <div key={img.id} className="bg-white rounded-xl border border-gray-200 p-2 shadow-sm hover:shadow-md transition-all">
+                                                <div className="aspect-[370/320] grid-bg rounded-lg flex items-center justify-center overflow-hidden border border-gray-200 relative group">
+                                                    <img src={img.dataUrl} className="w-full h-full object-contain" />
+                                                    <div className="absolute top-2 left-2 bg-black/60 text-white text-xs px-2.5 py-1 rounded-md font-mono font-bold">
+                                                        {(idx+1).toString().padStart(2, '0')}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* 進階設定 */}
+                                    <div className="mb-8">
+                                        <button onClick={() => setShowAdvanced(!showAdvanced)} className="text-gray-500 underline text-sm flex items-center gap-1 font-medium hover:text-gray-800">
+                                            {showAdvanced ? "隱藏設定" : "⚙️ 進階調整：還是有留白？切錯格數？點這裡調整"}
+                                        </button>
+                                        
+                                        {showAdvanced && (
+                                            <div className="mt-4 bg-gray-100 p-6 rounded-xl border border-gray-200 animate-fade-in">
+                                                <div className="grid md:grid-cols-3 gap-6 mb-4">
+                                                    <div>
+                                                        <label className="block text-gray-700 font-bold mb-2">版面重新設定</label>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={()=>setGridRows(3)} className={`flex-1 py-2 rounded-lg border ${gridRows===3?'bg-orange-100 border-orange-500 text-orange-700':'bg-white border-gray-300'}`}>4x3</button>
+                                                            <button onClick={()=>setGridRows(4)} className={`flex-1 py-2 rounded-lg border ${gridRows===4?'bg-orange-100 border-orange-500 text-orange-700':'bg-white border-gray-300'}`}>4x4</button>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    <div>
+                                                        <label className="block text-gray-700 font-bold mb-2">裁切模式 (消除黑邊)</label>
+                                                        <div className="flex gap-2">
+                                                            <button onClick={()=>setScaleMode('fit')} className={`flex-1 py-2 rounded-lg border ${scaleMode==='fit'?'bg-blue-100 border-blue-500 text-blue-700':'bg-white border-gray-300'}`}>
+                                                                完整顯示<br/><span className="text-xs font-normal opacity-75">(有透明邊)</span>
+                                                            </button>
+                                                            <button onClick={()=>setScaleMode('fill')} className={`flex-1 py-2 rounded-lg border ${scaleMode==='fill'?'bg-blue-100 border-blue-500 text-blue-700':'bg-white border-gray-300'}`}>
+                                                                填滿畫面<br/><span className="text-xs font-normal opacity-75">(無邊/微裁)</span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+
+                                                    <div>
+                                                        <label className="block text-gray-700 font-bold mb-2">去背強度: {colorTolerance}</label>
+                                                        <input type="range" min="1" max="80" value={colorTolerance} onChange={(e)=>setColorTolerance(Number(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-orange-500"/>
+                                                    </div>
+                                                </div>
+
+                                                <button onClick={() => startProcessing(originalSheet)} className="w-full bg-gray-800 text-white px-6 py-3 rounded-xl hover:bg-black transition font-bold shadow-lg">
+                                                    套用設定並重新處理圖片
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="text-center pt-4 border-t border-gray-100">
+                                        <button 
+                                            onClick={downloadZip} 
+                                            className="btn-action bg-green-500 text-white hover:bg-green-600 w-full md:w-auto md:px-12 mx-auto shadow-green-200 shadow-lg transform active:scale-95"
+                                        >
+                                            <IconDownload width="32" height="32" />
+                                            下載 {finalImages.length} 張貼圖 (ZIP)
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

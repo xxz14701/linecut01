@@ -301,11 +301,11 @@
                     zip.file(`${(idx+1).toString().padStart(2, '0')}.png`, b64, {base64:true});
                 }));
                 
-                const mImg = finalImages.find(i => i.id === mainId) || finalImages[0];
-                if (mImg) zip.file("main.png", await resizeImageFromUrl(mImg.dataUrl, 240, 240), {base64: true});
+                // const mImg = finalImages.find(i => i.id === mainId) || finalImages[0];
+                // if (mImg) zip.file("main.png", await resizeImageFromUrl(mImg.dataUrl, 240, 240), {base64: true});
                 
-                const tImg = finalImages.find(i => i.id === tabId) || finalImages[0];
-                if (tImg) zip.file("tab.png", await resizeImageFromUrl(tImg.dataUrl, 96, 74), {base64: true});
+                // const tImg = finalImages.find(i => i.id === tabId) || finalImages[0];
+                // if (tImg) zip.file("tab.png", await resizeImageFromUrl(tImg.dataUrl, 96, 74), {base64: true});
 
                 zip.generateAsync({type:"blob"}).then(c => saveAs(c, `Line貼圖_${gridRows*4}張_已去背.zip`));
             };
